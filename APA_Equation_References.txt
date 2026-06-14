@@ -1,0 +1,21 @@
+American Society of Heating, Refrigerating and Air-Conditioning Engineers. (2021). *2021 ASHRAE handbook—Fundamentals*. ASHRAE.
+
+American Society of Heating, Refrigerating and Air-Conditioning Engineers. (2017). *ANSI/ASHRAE Standard 52.2-2017: Method of testing general ventilation air-cleaning devices for removal efficiency by particle size*. ASHRAE.
+
+American Society of Heating, Refrigerating and Air-Conditioning Engineers. (2023). *ANSI/ASHRAE Standard 55-2023: Thermal environmental conditions for human occupancy*. ASHRAE.
+
+Bacher, P., & Madsen, H. (2011). Identifying suitable models for the heat dynamics of buildings. *Energy and Buildings, 43*(7), 1511–1522. https://doi.org/10.1016/j.enbuild.2011.02.005
+
+Jardine, A. K. S., Lin, D., & Banjevic, D. (2006). A review on machinery diagnostics and prognostics implementing condition-based maintenance. *Mechanical Systems and Signal Processing, 20*(7), 1483–1510. https://doi.org/10.1016/j.ymssp.2005.09.012
+
+Kern, D. Q., & Seaton, R. E. (1959). A theoretical analysis of thermal surface fouling. *British Chemical Engineering, 4*(5), 258–262.
+
+Marler, R. T., & Arora, J. S. (2010). The weighted sum method for multi-objective optimization: New insights. *Structural and Multidisciplinary Optimization, 41*(6), 853–862. https://doi.org/10.1007/s00158-009-0460-7
+
+Rubinstein, R. Y. (1999). The cross-entropy method for combinatorial and continuous optimization. *Methodology and Computing in Applied Probability, 1*(2), 127–190. https://doi.org/10.1023/A:1010091220143
+
+Teng, G., Shi, G., & Zhu, J. (2022). Influence of pleated geometry on the pressure drop of filters during dust loading process: Experimental and modelling study. *Scientific Reports, 12*, 20331. https://doi.org/10.1038/s41598-022-24838-7
+
+U.S. Department of Energy. (2024). *EnergyPlus engineering reference* (Version 24.1). EnergyPlus.
+
+World Resources Institute, & World Business Council for Sustainable Development. (2015). *GHG Protocol Scope 2 guidance: An amendment to the GHG Protocol corporate standard*. World Resources Institute.

@@ -1,0 +1,182 @@
+--- /mnt/data/HVAC_v3_corrected_bundle/hvac_v3_engine_original_backup.py	2026-06-12 19:00:27.053817889 +0000
++++ /mnt/data/HVAC_v3_corrected_bundle/hvac_v3_engine.py	2026-06-12 19:01:46.249972335 +0000
+@@ -3125,13 +3125,43 @@
+     out.update(deadband_fallback_terms)
+     return out
+ 
+-def evaluate_controls(bldg: BuildingSpec, cfg: HVACConfig, derived: Dict[str, float], T_mean: float, RH_mean: float, GHI_mean: float, occ: float, year_frac: float, doy: int, rf: float, dust: float, T_sp: float, af: float, duration_hours: float = 24.0) -> Dict[str, float]:
++def advance_physics_degradation_state(
++    cfg: HVACConfig,
++    rf: float,
++    dust: float,
++    af: float,
++    duration_hours: float = 24.0,
++) -> Tuple[float, float, float, float]:
++    """Advance the physics-based degradation state exactly once.
++
++    This function is intentionally independent of the energy/load calculation. It is
++    used by ``simulate_combo`` to prevent post-maintenance performance re-evaluation
++    from advancing fouling and dust accumulation for a second time in the same
++    accepted simulation period.
++    """
++    if not getattr(cfg, "USE_DEGRADATION", True):
++        return 0.0, 0.0, float(cfg.DP_CLEAN), 0.0
++    time_scale_days = max(float(duration_hours), 0.0) / 24.0
++    rf_next = cfg.RF_STAR - (cfg.RF_STAR - float(rf)) * math.exp(-cfg.B_FOUL * time_scale_days)
++    dust_next = float(dust) + cfg.DUST_RATE * float(af) * time_scale_days
++    dp_next, deg_next = degradation_index(cfg, rf_next, dust_next)
++    return float(rf_next), float(dust_next), float(dp_next), float(deg_next)
++
++
++def evaluate_controls(bldg: BuildingSpec, cfg: HVACConfig, derived: Dict[str, float], T_mean: float, RH_mean: float, GHI_mean: float, occ: float, year_frac: float, doy: int, rf: float, dust: float, T_sp: float, af: float, duration_hours: float = 24.0, advance_degradation: bool = True) -> Dict[str, float]:
+     cfg._CURRENT_DOY = int(doy)
+     time_scale_days = duration_hours / 24.0
+     if getattr(cfg, "USE_DEGRADATION", True):
+-        rf_next = cfg.RF_STAR - (cfg.RF_STAR - rf) * math.exp(-cfg.B_FOUL * time_scale_days)
+-        dust_next = dust + cfg.DUST_RATE * af * time_scale_days
+-        dp_next, deg_next = degradation_index(cfg, rf_next, dust_next)
++        if advance_degradation:
++            rf_next, dust_next, dp_next, deg_next = advance_physics_degradation_state(
++                cfg=cfg, rf=rf, dust=dust, af=af, duration_hours=duration_hours
++            )
++        else:
++            # Evaluate loads, energy, comfort and objective at an already accepted
++            # degradation state without performing another physical state transition.
++            rf_next = float(rf)
++            dust_next = float(dust)
++            dp_next, deg_next = degradation_index(cfg, rf_next, dust_next)
+     else:
+         rf_next, dust_next, dp_next, deg_next = 0.0, 0.0, cfg.DP_CLEAN, 0.0
+     cfg._CURRENT_DELTA = deg_next
+@@ -3281,6 +3311,11 @@
+ 
+     if not getattr(cfg, "USE_DEGRADATION", True):
+         degradation_model = "none"
++    elif degradation_model == "none":
++        # Explicit no-degradation runs must also disable the internal physics update
++        # used by evaluate_controls; otherwise the clean pressure-drop term produces
++        # a nonzero composite indicator even though degradation was requested off.
++        cfg.USE_DEGRADATION = False
+ 
+     for step in range(cfg.years * steps_per_year):
+         tf = step_time_fields_from_weather(step, duration_hours, base_weather)
+@@ -3291,6 +3326,16 @@
+         year_frac = float(tf["elapsed_days"]) / 365.0
+         T_mean, T_max, RH_mean, GHI_mean, occ = climate_and_operation_for_step(step, duration_hours, base_weather, climate_name, schedule_profile)
+ 
++        # Auditable state snapshots. Exactly one accepted degradation transition is
++        # performed per time step; performance may be re-evaluated without transition.
++        rf_start = float(rf)
++        dust_start = float(dust)
++        delta_start = float(delta_state)
++        rf_pre_maintenance = rf_start
++        dust_pre_maintenance = dust_start
++        dp_pre_maintenance = float(cfg.DP_CLEAN)
++        delta_pre_maintenance = delta_start
++
+         if strategy == "S3":
+             T_sp, af = optimize_s3(bldg, cfg, derived, T_mean, RH_mean, GHI_mean, occ, year_frac, doy, rf, dust, T_sp, af, rng, duration_hours=duration_hours)
+         else:
+@@ -3309,12 +3354,17 @@
+         )
+ 
+         if degradation_model == "physics":
+-            res = evaluate_controls(bldg, cfg, derived, T_mean, RH_mean, GHI_mean, occ, year_frac, doy, rf, dust, T_sp, af, duration_hours=duration_hours)
+-            rf = res["rf_next"]
+-            dust = res["dust_next"]
+-            dp = res["dp_next"]
+-            deg = res["deg_next"]
++            # Advance the physical degradation state once, before the maintenance
++            # decision. Do not calculate accepted-period energy yet.
++            rf, dust, dp, deg = advance_physics_degradation_state(
++                cfg=cfg, rf=rf_start, dust=dust_start, af=af, duration_hours=duration_hours
++            )
+             delta_state = deg
++            rf_pre_maintenance = float(rf)
++            dust_pre_maintenance = float(dust)
++            dp_pre_maintenance = float(dp)
++            delta_pre_maintenance = float(delta_state)
++            res = {}
+         elif degradation_model in ["linear_ts", "exponential_ts"]:
+             rf, dust, dp, deg = ts_degradation_update(
+                 cfg=cfg,
+@@ -3327,6 +3377,10 @@
+                 time_scale_days=time_scale_days,
+             )
+             delta_state = deg
++            rf_pre_maintenance = float(rf)
++            dust_pre_maintenance = float(dust)
++            dp_pre_maintenance = float(dp)
++            delta_pre_maintenance = float(delta_state)
+             cfg._CURRENT_DELTA = delta_state
+             cfg._CURRENT_AF = af
+             cfg._CURRENT_DELTA = delta_state
+@@ -3380,7 +3434,9 @@
+                    "E_hvac": P_hvac * duration_hours, "E_fan": P_fan * duration_hours, "E_pump": P_pump * duration_hours, "E_aux": P_aux * duration_hours, "E_day": E_period, "E_period": E_period, "co2": co2, "comfort_dev": comfort_dev, "objective": J, "people": loads.get("people", 0.0), "internal_kw": loads.get("internal_kw", 0.0)}
+         elif degradation_model == "none":
+             rf, dust, dp, delta_state = 0.0, 0.0, cfg.DP_CLEAN, 0.0
+-            res = evaluate_controls(bldg, cfg, derived, T_mean, RH_mean, GHI_mean, occ, year_frac, doy, rf, dust, T_sp, af, duration_hours=duration_hours)
++            rf_pre_maintenance, dust_pre_maintenance = 0.0, 0.0
++            dp_pre_maintenance, delta_pre_maintenance = float(cfg.DP_CLEAN), 0.0
++            res = {}
+         else:
+             raise ValueError(f"Unsupported degradation_model: {degradation_model}")
+ 
+@@ -3423,9 +3479,23 @@
+             dp = min(cfg.DP_CLEAN + delta_state * (cfg.DP_MAX - cfg.DP_CLEAN), cfg.DP_MAX)
+             dust = max((dp - cfg.DP_CLEAN) / max(cfg.K_CLOG, 1e-9), 0.0)
+ 
+-        # Re-evaluate after maintenance reset so the period energy reflects post-action operation, as in the original model pattern.
++        # Determine and propagate the accepted post-maintenance state. The subsequent
++        # performance evaluation is state-static and cannot advance degradation again.
++        if degradation_model == "physics":
++            dp, delta_state = degradation_index(cfg, rf, dust)
++        elif degradation_model == "none":
++            rf, dust, dp, delta_state = 0.0, 0.0, cfg.DP_CLEAN, 0.0
++
++        rf_post_maintenance = float(rf)
++        dust_post_maintenance = float(dust)
++        dp_post_maintenance = float(dp)
++        delta_post_maintenance = float(delta_state)
++
+         if degradation_model in ["physics", "none"]:
+-            res = evaluate_controls(bldg, cfg, derived, T_mean, RH_mean, GHI_mean, occ, year_frac, doy, rf, dust, T_sp, af, duration_hours=duration_hours)
++            res = evaluate_controls(
++                bldg, cfg, derived, T_mean, RH_mean, GHI_mean, occ, year_frac, doy,
++                rf, dust, T_sp, af, duration_hours=duration_hours, advance_degradation=False
++            )
+         else:
+             cfg._CURRENT_DELTA = delta_state
+             cfg._CURRENT_AF = af
+@@ -3511,6 +3581,22 @@
+             "ems_occ_control": ems_flags.get("ems_occ_control", 0), "ems_night_setback": ems_flags.get("ems_night_setback", 0),
+             "ems_demand_response": ems_flags.get("ems_demand_response", 0), "ems_economizer": ems_flags.get("ems_economizer", 0),
+             "ems_custom_schedule": ems_flags.get("ems_custom_schedule", 0), "ems_optimum_start": ems_flags.get("ems_optimum_start", 0),
++            "R_f_start": rf_start, "dust_start_kg": dust_start, "delta_start": delta_start,
++            "R_f_pre_maintenance": rf_pre_maintenance,
++            "dust_pre_maintenance_kg": dust_pre_maintenance,
++            "dP_pre_maintenance_Pa": dp_pre_maintenance,
++            "delta_pre_maintenance": delta_pre_maintenance,
++            "R_f_post_maintenance": rf_post_maintenance,
++            "dust_post_maintenance_kg": dust_post_maintenance,
++            "dP_post_maintenance_Pa": dp_post_maintenance,
++            "delta_post_maintenance": delta_post_maintenance,
++            "accepted_degradation_state_updates": 1 if degradation_model in ["physics", "linear_ts", "exponential_ts"] else 0,
++            "state_update_consistency_flag": int(
++                abs(float(res.get("rf_next", rf)) - float(rf)) < 1e-12
++                and abs(float(res.get("dust_next", dust)) - float(dust)) < 1e-12
++                and abs(float(res.get("dp_next", dp)) - float(dp)) < 1e-9
++                and abs(float(res.get("deg_next", delta_state)) - float(delta_state)) < 1e-9
++            ),
+             "R_f": rf, "dust_kg": dust,
+             "dP_Pa": res["dp_next"], "dP_fan_Pa": res.get("dP_fan_Pa", res.get("dp_next", np.nan)), "dP_water_kPa": res.get("dP_water_kPa", 0.0), "water_flow_m3h": res.get("water_flow_m3h", 0.0),
+             "delta": res["deg_next"], "COP_eff": res["cop"], "COP_base_before_PLR": res.get("COP_base_before_PLR", res.get("cop", np.nan)),
+@@ -3939,6 +4025,8 @@
+         "available_severity_levels": list(SEVERITY_LEVELS.keys()),
+         "available_climate_levels": list(CLIMATE_LEVELS.keys()),
+         "degradation_model": degradation_model,
++        "degradation_state_update_scheme": "one accepted transition per time step; post-maintenance performance evaluation is state-static",
++        "engine_revision": "state_update_fix_2026-06-12",
+         "ems_mode": getattr(cfg, "EMS_MODE", "Disabled"),
+         "operation_schedule_rows": int(len(operation_schedule_df)) if operation_schedule_df is not None else 0,
+         "include_baseline_layer": include_baseline_layer,
